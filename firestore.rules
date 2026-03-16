@@ -1,0 +1,129 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: worksheets
+    // Document ID: auto-generated
+    // Fields:
+    //   - grade: number (required, must be 1)
+    //   - classNumber: number (required, 1-11)
+    //   - studentNumber: number (required, > 0)
+    //   - studentName: string (required, length < 50)
+    //   - characterName: string (optional, length < 100)
+    //   - characterTraits: string (optional, length < 1000)
+    //   - event: string (optional, length < 200)
+    //   - eventOther: string (optional, length < 200)
+    //   - title: string (optional, length < 100)
+    //   - conflict: string (optional, length < 1000)
+    //   - solution: string (optional, length < 1000)
+    //   - sciencePrinciple: string (optional, length < 200)
+    //   - drawings: list of strings (optional, max 4 items, each < 2MB)
+    //   - captions: list of strings (optional, max 4 items, each < 200)
+    //   - createdAt: timestamp (required, immutable)
+    //   - authorUid: string (required, immutable)
+    //
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.authorUid;
+    }
+    
+    function uidUnchanged() {
+      return !('authorUid' in request.resource.data) || request.resource.data.authorUid == request.auth.uid;
+    }
+    
+    function uidNotModified() {
+      return !('authorUid' in request.resource.data) || request.resource.data.authorUid == resource.data.authorUid;
+    }
+    
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+    
+    function validStringLength(field, minLen, maxLen) {
+      return request.resource.data[field] is string &&
+        request.resource.data[field].size() >= minLen &&
+        request.resource.data[field].size() <= maxLen;
+    }
+    
+    function isValidOptionalString(field, minLen, maxLen) {
+      return !(field in request.resource.data) ||
+             (request.resource.data[field] is string &&
+              request.resource.data[field].size() >= minLen &&
+              request.resource.data[field].size() <= maxLen);
+    }
+    
+    function isValidWorksheet(data) {
+      return hasRequiredFields(['grade', 'classNumber', 'studentNumber', 'studentName', 'authorUid', 'createdAt']) &&
+             data.grade is number && data.grade == 1 &&
+             data.classNumber is number && data.classNumber >= 0 && data.classNumber <= 100 &&
+             data.studentNumber is number && data.studentNumber >= 0 && data.studentNumber <= 100 &&
+             data.studentName is string && data.studentName.size() > 0 && data.studentName.size() < 50 &&
+             data.authorUid is string && data.authorUid.size() > 0 && data.authorUid.size() < 100 &&
+             data.createdAt is timestamp &&
+             isValidOptionalString('characterName', 0, 100) &&
+             isValidOptionalString('characterTraits', 0, 1000) &&
+             isValidOptionalString('event', 0, 200) &&
+             isValidOptionalString('eventOther', 0, 200) &&
+             isValidOptionalString('title', 0, 100) &&
+             isValidOptionalString('conflict', 0, 1000) &&
+             isValidOptionalString('solution', 0, 1000) &&
+             isValidOptionalString('sciencePrinciple', 0, 200) &&
+             (!( 'drawings' in data ) || (data.drawings is list && data.drawings.size() <= 4)) &&
+             (!( 'captions' in data ) || (data.captions is list && data.captions.size() <= 4));
+    }
+
+    function isValidFeedback(data) {
+      return hasRequiredFields(['worksheetId', 'authorUid', 'authorName', 'content', 'createdAt']) &&
+             data.worksheetId is string && data.worksheetId.size() > 0 && data.worksheetId.size() < 100 &&
+             data.authorUid is string && data.authorUid.size() > 0 && data.authorUid.size() < 100 &&
+             data.authorName is string && data.authorName.size() > 0 && data.authorName.size() < 50 &&
+             data.content is string && data.content.size() > 0 && data.content.size() < 1000 &&
+             data.createdAt is timestamp;
+    }
+
+    match /worksheets/{worksheetId} {
+      // Anyone can read
+      allow read: if true;
+      
+      // Anyone can create (validation ensures schema is correct)
+      allow create: if isValidWorksheet(request.resource.data);
+                    
+      // Anyone can update (allows teachers to edit student info)
+      allow update: if isValidWorksheet(request.resource.data) && 
+                    request.resource.data.createdAt == resource.data.createdAt;
+                    
+      // Anyone can delete
+      allow delete: if true;
+    }
+
+    match /feedbacks/{feedbackId} {
+      // Anyone can read
+      allow read: if true;
+      
+      // Anyone can create
+      allow create: if isValidFeedback(request.resource.data);
+                    
+      // Anyone can update
+      allow update: if isValidFeedback(request.resource.data) && 
+                    request.resource.data.createdAt == resource.data.createdAt &&
+                    request.resource.data.worksheetId == resource.data.worksheetId;
+                    
+      // Anyone can delete
+      allow delete: if true;
+    }
+  }
+}

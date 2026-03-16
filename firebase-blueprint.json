@@ -1,0 +1,126 @@
+{
+  "entities": {
+    "Worksheet": {
+      "title": "Worksheet",
+      "description": "A student's submitted worksheet",
+      "type": "object",
+      "properties": {
+        "grade": {
+          "type": "number",
+          "description": "Student's grade (e.g., 1)"
+        },
+        "classNumber": {
+          "type": "number",
+          "description": "Student's class number (1-11)"
+        },
+        "studentNumber": {
+          "type": "number",
+          "description": "Student's number in class"
+        },
+        "studentName": {
+          "type": "string",
+          "description": "Student's name"
+        },
+        "characterName": {
+          "type": "string",
+          "description": "Character's name"
+        },
+        "characterTraits": {
+          "type": "string",
+          "description": "Character's traits"
+        },
+        "event": {
+          "type": "string",
+          "description": "The event that happened"
+        },
+        "eventOther": {
+          "type": "string",
+          "description": "Other event description if 'Other' is selected"
+        },
+        "title": {
+          "type": "string",
+          "description": "Title of the story"
+        },
+        "conflict": {
+          "type": "string",
+          "description": "Conflict description"
+        },
+        "solution": {
+          "type": "string",
+          "description": "Solution and science principle"
+        },
+        "sciencePrinciple": {
+          "type": "string",
+          "description": "One-line summary of science principle"
+        },
+        "drawings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Array of 4 base64 encoded images"
+        },
+        "captions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Array of 4 captions"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp"
+        },
+        "authorUid": {
+          "type": "string",
+          "description": "UID of the user who created the worksheet"
+        }
+      },
+      "required": ["grade", "classNumber", "studentNumber", "studentName", "authorUid", "createdAt"]
+    },
+    "Feedback": {
+      "title": "Feedback",
+      "description": "A student's feedback on a worksheet",
+      "type": "object",
+      "properties": {
+        "worksheetId": {
+          "type": "string",
+          "description": "ID of the worksheet being commented on"
+        },
+        "authorUid": {
+          "type": "string",
+          "description": "UID of the user who wrote the feedback"
+        },
+        "authorName": {
+          "type": "string",
+          "description": "Name of the user who wrote the feedback"
+        },
+        "content": {
+          "type": "string",
+          "description": "Feedback content"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp"
+        }
+      },
+      "required": ["worksheetId", "authorUid", "authorName", "content", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/worksheets/{worksheetId}": {
+      "schema": {
+        "$ref": "Worksheet"
+      },
+      "description": "Collection of submitted worksheets"
+    },
+    "/feedbacks/{feedbackId}": {
+      "schema": {
+        "$ref": "Feedback"
+      },
+      "description": "Collection of feedbacks on worksheets"
+    }
+  }
+}
