@@ -66,6 +66,12 @@ service cloud.firestore {
               request.resource.data[field].size() <= maxLen);
     }
     
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "wh2407@gmail.com" && request.auth.token.email_verified == true));
+    }
+    
     function isValidWorksheet(data) {
       return hasRequiredFields(['grade', 'classNumber', 'studentNumber', 'studentName', 'authorUid', 'createdAt']) &&
              data.grade is number && data.grade == 1 &&
@@ -95,35 +101,8 @@ service cloud.firestore {
              data.createdAt is timestamp;
     }
 
-    match /worksheets/{worksheetId} {
-      // Anyone can read
-      allow read: if true;
-      
-      // Anyone can create (validation ensures schema is correct)
-      allow create: if isValidWorksheet(request.resource.data);
-                    
-      // Anyone can update (allows teachers to edit student info)
-      allow update: if isValidWorksheet(request.resource.data) && 
-                    request.resource.data.createdAt == resource.data.createdAt;
-                    
-      // Anyone can delete
-      allow delete: if true;
-    }
-
-    match /feedbacks/{feedbackId} {
-      // Anyone can read
-      allow read: if true;
-      
-      // Anyone can create
-      allow create: if isValidFeedback(request.resource.data);
-                    
-      // Anyone can update
-      allow update: if isValidFeedback(request.resource.data) && 
-                    request.resource.data.createdAt == resource.data.createdAt &&
-                    request.resource.data.worksheetId == resource.data.worksheetId;
-                    
-      // Anyone can delete
-      allow delete: if true;
+    match /{document=**} {
+      allow read, write: if true;
     }
   }
 }

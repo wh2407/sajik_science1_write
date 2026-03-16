@@ -3,10 +3,71 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef, useEffect } from 'react';
-import { Search, BookOpen, Zap, Lightbulb, Pin, Printer, Send, Users, ArrowLeft, LogIn, LogOut, MessageSquare, ShieldCheck, Award, UserCircle, Edit2, Trash2, HelpCircle, X } from 'lucide-react';
-import { db } from './firebase';
-import { collection, addDoc, getDocs, query, orderBy, serverTimestamp, where, updateDoc, doc, deleteDoc } from 'firebase/firestore';
+import * as React from 'react';
+import { useState, useRef, useEffect, Component } from 'react';
+import { Search, BookOpen, Zap, Lightbulb, Pin, Printer, Send, Users, ArrowLeft, LogIn, LogOut, MessageSquare, ShieldCheck, Award, UserCircle, Edit2, Trash2, HelpCircle, X, Upload } from 'lucide-react';
+import { db, auth } from './firebase';
+import { collection, addDoc, getDocs, query, orderBy, serverTimestamp, where, updateDoc, doc, deleteDoc, getDoc, setDoc, getDocFromServer } from 'firebase/firestore';
+
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string;
+    email?: string;
+    emailVerified?: boolean;
+    isAnonymous?: boolean;
+    tenantId?: string | null;
+    providerInfo: {
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email || undefined,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData.map(provider => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        email: provider.email,
+        photoUrl: provider.photoURL
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
+interface ErrorBoundaryProps {
+  children: React.ReactNode;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+  errorInfo: string;
+}
 
 const DrawingCanvas = ({ 
   label, 
@@ -19,12 +80,13 @@ const DrawingCanvas = ({
   key?: number | string,
   label: string, 
   caption: string, 
-  onCaptionChange?: (val: string) => void, 
+  onCaptionChange?: (val: string) => void,
   id: string,
   readOnly?: boolean,
   initialImage?: string
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDrawing, setIsDrawing] = useState(false);
 
   useEffect(() => {
@@ -42,7 +104,9 @@ const DrawingCanvas = ({
 
         if (initialImage) {
           const img = new Image();
+          img.crossOrigin = "anonymous";
           img.onload = () => {
+            ctx.clearRect(0, 0, rect.width, rect.height);
             ctx.drawImage(img, 0, 0, rect.width, rect.height);
           };
           img.src = initialImage;
@@ -112,6 +176,38 @@ const DrawingCanvas = ({
     ctx.clearRect(0, 0, canvas.width, canvas.height);
   };
 
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = canvasRef.current;
+        if (canvas) {
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            const rect = canvas.getBoundingClientRect();
+            ctx.clearRect(0, 0, rect.width, rect.height);
+            
+            // Calculate aspect ratio to fit image in canvas
+            const hRatio = rect.width / img.width;
+            const vRatio = rect.height / img.height;
+            const ratio = Math.min(hRatio, vRatio);
+            const centerShiftX = (rect.width - img.width * ratio) / 2;
+            const centerShiftY = (rect.height - img.height * ratio) / 2;
+            
+            ctx.drawImage(img, 0, 0, img.width, img.height,
+              centerShiftX, centerShiftY, img.width * ratio, img.height * ratio);
+          }
+        }
+      };
+      img.src = event.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  };
+
   return (
     <div className="flex flex-col w-full h-full">
       <div className="border-2 border-slate-500 rounded-lg overflow-hidden bg-white flex flex-col aspect-square relative group">
@@ -131,12 +227,27 @@ const DrawingCanvas = ({
           onTouchEnd={stopDrawing}
         />
         {!readOnly && (
-          <button 
-            onClick={clearCanvas} 
-            className="absolute bottom-2 right-2 text-xs font-medium text-slate-500 hover:text-red-500 z-10 print:hidden bg-white/90 px-2 py-1 rounded shadow-sm opacity-0 group-hover:opacity-100 transition-opacity"
-          >
-            지우기
-          </button>
+          <div className="absolute bottom-2 right-2 flex gap-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity print:hidden">
+            <button 
+              onClick={() => fileInputRef.current?.click()}
+              className="text-[10px] font-bold text-indigo-600 hover:bg-indigo-50 bg-white/90 px-2 py-1 rounded shadow-sm border border-indigo-100 flex items-center gap-1"
+            >
+              <Upload className="w-3 h-3" /> 업로드
+            </button>
+            <button 
+              onClick={clearCanvas} 
+              className="text-[10px] font-bold text-slate-500 hover:text-red-500 bg-white/90 px-2 py-1 rounded shadow-sm border border-slate-100"
+            >
+              지우기
+            </button>
+            <input 
+              type="file" 
+              ref={fileInputRef} 
+              onChange={handleFileUpload} 
+              accept="image/*" 
+              className="hidden" 
+            />
+          </div>
         )}
       </div>
       {readOnly ? (
@@ -196,6 +307,51 @@ export default function App() {
   const [selectedClass, setSelectedClass] = useState<number | 'all'>('all');
   const [selectedSubmission, setSelectedSubmission] = useState<any>(null);
 
+  // Example Images State
+  const [exampleImages, setExampleImages] = useState<{ kolkol: string, dance: string }>({ kolkol: '', dance: '' });
+
+  const fetchExampleImages = async () => {
+    try {
+      // Test connection first as per critical directive
+      try {
+        await getDocFromServer(doc(db, 'config', 'connection_test'));
+      } catch (e) {}
+
+      const docRef = doc(db, 'config', 'examples');
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        setExampleImages(docSnap.data() as any);
+      }
+    } catch (e) {
+      handleFirestoreError(e, OperationType.GET, 'config/examples');
+    }
+  };
+
+  useEffect(() => {
+    fetchExampleImages();
+  }, []);
+
+  const handleExampleUpload = async (type: 'kolkol' | 'dance', e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const base64 = event.target?.result as string;
+      try {
+        await setDoc(doc(db, 'config', 'examples'), {
+          [type]: base64
+        }, { merge: true });
+        setExampleImages(prev => ({ ...prev, [type]: base64 }));
+        alert('예시 이미지가 업데이트되었습니다.');
+      } catch (err) {
+        console.error("Error saving example image:", err);
+        alert('이미지 저장 중 오류가 발생했습니다.');
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
   // Feedback State
   const [feedbacks, setFeedbacks] = useState<any[]>([]);
   const [newFeedback, setNewFeedback] = useState('');
@@ -234,7 +390,7 @@ export default function App() {
       const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setSubmissions(data);
     } catch (error) {
-      console.error("Error fetching submissions:", error);
+      handleFirestoreError(error, OperationType.LIST, 'worksheets');
     }
   };
 
@@ -245,7 +401,7 @@ export default function App() {
       const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setAllFeedbacks(data);
     } catch (error) {
-      console.error("Error fetching all feedbacks:", error);
+      handleFirestoreError(error, OperationType.LIST, 'feedbacks');
     }
   };
 
@@ -256,7 +412,7 @@ export default function App() {
       const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setFeedbacks(data);
     } catch (error) {
-      console.error("Error fetching feedbacks:", error);
+      handleFirestoreError(error, OperationType.LIST, `feedbacks/${worksheetId}`);
     }
   };
 
@@ -873,17 +1029,19 @@ export default function App() {
                       아래 예시는 입자(동그라미)의 <span className="font-bold text-slate-800">위치와 간격</span>으로 움직임의 변화를 나타낸 것입니다.
                     </div>
                     
-                    <div className="w-full rounded-xl overflow-hidden border border-slate-200 bg-slate-50 flex flex-col items-center justify-center p-8 text-center min-h-[300px]">
+                    <div className="w-full rounded-xl overflow-hidden border border-slate-200 bg-slate-50 flex flex-col items-center justify-center p-8 text-center min-h-[300px] relative group/img">
                       <img 
-                        src="/kolkol_comic.png" 
+                        src={exampleImages.kolkol || "/kolkol_comic.png"} 
                         alt="콜콜이의 하루 4컷 만화" 
                         className="w-full h-auto object-contain max-h-[800px] rounded-lg shadow-sm"
                         onError={(e) => {
-                          e.currentTarget.style.display = 'none';
-                          e.currentTarget.nextElementSibling?.classList.remove('hidden');
+                          if (!exampleImages.kolkol) {
+                            e.currentTarget.style.display = 'none';
+                            e.currentTarget.nextElementSibling?.classList.remove('hidden');
+                          }
                         }}
                       />
-                      <div className="hidden">
+                      <div className={exampleImages.kolkol || submissions.length > 0 ? "hidden" : ""}>
                         <div className="w-16 h-16 bg-indigo-100 text-indigo-500 rounded-full flex items-center justify-center mb-4 mx-auto">
                           <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
@@ -891,10 +1049,21 @@ export default function App() {
                         </div>
                         <p className="text-slate-700 font-bold text-lg mb-2">첨부하신 4컷 만화 이미지가 들어갈 자리입니다.</p>
                         <p className="text-slate-500 text-sm max-w-md mx-auto">
-                          AI 환경의 제한으로 이미지 파일을 직접 저장할 수 없습니다.<br/>
-                          <span className="text-indigo-600 font-bold">public</span> 폴더에 <code className="bg-slate-200 px-1 rounded">kolkol_comic.png</code> 이름으로 이미지를 업로드하시면 여기에 나타납니다.
+                          {isTeacher ? (
+                            "교사 모드에서 아래 버튼을 통해 이미지를 업로드할 수 있습니다."
+                          ) : (
+                            "선생님께서 이미지를 업로드하시면 여기에 나타납니다."
+                          )}
                         </p>
                       </div>
+                      {isTeacher && (
+                        <div className="absolute top-4 right-4 opacity-0 group-hover/img:opacity-100 transition-opacity">
+                          <label className="bg-white/90 hover:bg-white text-indigo-600 px-4 py-2 rounded-full shadow-md cursor-pointer font-bold text-sm flex items-center gap-2 border border-indigo-100">
+                            <Upload className="w-4 h-4" /> 예시 이미지 업로드
+                            <input type="file" className="hidden" accept="image/*" onChange={(e) => handleExampleUpload('kolkol', e)} />
+                          </label>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </>
@@ -981,17 +1150,19 @@ export default function App() {
                       선생님께서 첨부해주신 4컷 만화 이미지입니다.
                     </div>
                     
-                    <div className="w-full rounded-xl overflow-hidden border border-slate-200 bg-slate-50 flex flex-col items-center justify-center p-8 text-center min-h-[300px]">
+                    <div className="w-full rounded-xl overflow-hidden border border-slate-200 bg-slate-50 flex flex-col items-center justify-center p-8 text-center min-h-[300px] relative group/img">
                       <img 
-                        src="/dance_party_comic.png" 
+                        src={exampleImages.dance || "/dance_party_comic.png"} 
                         alt="멈출 수 없는 댄스 파티 4컷 만화" 
                         className="w-full h-auto object-contain max-h-[800px] rounded-lg shadow-sm"
                         onError={(e) => {
-                          e.currentTarget.style.display = 'none';
-                          e.currentTarget.nextElementSibling?.classList.remove('hidden');
+                          if (!exampleImages.dance) {
+                            e.currentTarget.style.display = 'none';
+                            e.currentTarget.nextElementSibling?.classList.remove('hidden');
+                          }
                         }}
                       />
-                      <div className="hidden">
+                      <div className={exampleImages.dance || submissions.length > 0 ? "hidden" : ""}>
                         <div className="w-16 h-16 bg-indigo-100 text-indigo-500 rounded-full flex items-center justify-center mb-4 mx-auto">
                           <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
@@ -999,10 +1170,21 @@ export default function App() {
                         </div>
                         <p className="text-slate-700 font-bold text-lg mb-2">첨부하신 4컷 만화 이미지가 들어갈 자리입니다.</p>
                         <p className="text-slate-500 text-sm max-w-md mx-auto">
-                          AI 환경의 제한으로 이미지 파일을 직접 저장할 수 없습니다.<br/>
-                          <span className="text-indigo-600 font-bold">public</span> 폴더에 <code className="bg-slate-200 px-1 rounded">dance_party_comic.png</code> 이름으로 이미지를 업로드하시면 여기에 나타납니다.
+                          {isTeacher ? (
+                            "교사 모드에서 아래 버튼을 통해 이미지를 업로드할 수 있습니다."
+                          ) : (
+                            "선생님께서 이미지를 업로드하시면 여기에 나타납니다."
+                          )}
                         </p>
                       </div>
+                      {isTeacher && (
+                        <div className="absolute top-4 right-4 opacity-0 group-hover/img:opacity-100 transition-opacity">
+                          <label className="bg-white/90 hover:bg-white text-indigo-600 px-4 py-2 rounded-full shadow-md cursor-pointer font-bold text-sm flex items-center gap-2 border border-indigo-100">
+                            <Upload className="w-4 h-4" /> 예시 이미지 업로드
+                            <input type="file" className="hidden" accept="image/*" onChange={(e) => handleExampleUpload('dance', e)} />
+                          </label>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </>
